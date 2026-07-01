@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+import tempfile
+import re
 
 
 def ensure_package(pkg_name, import_name=None):
@@ -67,10 +69,20 @@ try:
 except ImportError:
     requests = ensure_package("requests")
 
+try:
+    from tabulate import tabulate
+except ImportError:
+    try:
+        tabulate = ensure_package("tabulate").tabulate
+    except Exception:
+        tabulate = None
+
 
 APP_TITLE = "Splitwise Settlement"
 ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 MONEY = Decimal("0.01")
+DEBUG_DUMP_ENV = "SPLITWISE_SETTLE_DUMP_OUTPUT_PATH"
+REPOSITORY_URL = "https://github.com/g-damilano/splitwise-settle"
 DEFAULT_DISPLAY_CURRENCIES = ["EUR", "USD", "GBP"]
 AVAILABLE_DISPLAY_CURRENCIES = [
     "EUR",
@@ -136,6 +148,149 @@ def convert_from_base(amount, target_currency, rates_to_base):
     if rate == 0:
         return money(amount)
     return money(Decimal(str(amount)) / rate)
+
+
+def _markdown_table(headers, rows):
+    """Return a simple markdown table string from header + row data."""
+    if not headers:
+        return ""
+
+    all_rows = [headers, *rows]
+    col_count = max(len(row) for row in all_rows)
+
+    normalized = []
+    for row in all_rows:
+        padded = [str(value) for value in row]
+        if len(padded) < col_count:
+            padded.extend([""] * (col_count - len(padded)))
+        normalized.append(padded)
+
+    widths = [0] * col_count
+    for row in normalized:
+        widths = [max(widths[i], len(row[i])) for i in range(col_count)]
+
+    def _fmt(row, sep):
+        return "| " + f" | ".join(
+            row[i].ljust(widths[i]) for i in range(col_count)
+        ) + " |"
+
+    divider = " | ".join("-" * width if width > 0 else "-" for width in widths)
+    header = _fmt(headers, "| ")
+    bar = f"| {divider} |"
+
+    body_lines = [_fmt(row, "| ") for row in rows]
+    return "\n".join([header, bar] + body_lines)
+
+
+def _extract_table_rows(lines, start, end):
+    rows = []
+    for raw in lines[start:end]:
+        line = raw.rstrip()
+        if not line:
+            continue
+        if set(line.strip()) == {"-"}:
+            continue
+        if re.match(r"^\s*From\s+To(\s+\w+){1,}\s*$", line):
+            continue
+        parts = [part for part in re.split(r"\s{2,}", line.strip()) if part]
+        if len(parts) >= 2:
+            rows.append(parts)
+    return rows
+
+
+def _extract_balances_rows(lines, start, end):
+    rows = []
+    for raw in lines[start:end]:
+        line = raw.rstrip()
+        if not line:
+            continue
+        if set(line.strip()) == {"-"}:
+            continue
+        if re.match(r"^\s*Name\s+Balance", line):
+            continue
+        parts = [part for part in re.split(r"\s{2,}", line.strip()) if part]
+        if len(parts) >= 2 and re.match(r"[+-]?\d+\.\d{2}\s+\w+", parts[-1]):
+            rows.append(parts[:2])
+    return rows
+
+
+def _section_end(lines, start):
+    for idx in range(start, len(lines)):
+        if lines[idx].startswith("File: "):
+            return idx
+    return len(lines)
+
+
+def format_output_for_whatsapp(text):
+    """
+    Convert the plain text result into WhatsApp-friendly markdown tables.
+    """
+    raw = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = raw.split("\n")
+    def section_idx(name):
+        return next((i for i, line in enumerate(lines) if line.strip() == name), None)
+
+    net_idx = section_idx("Net balances")
+    trans_idx = section_idx("Transactions to settle")
+    if net_idx is None or trans_idx is None:
+        return f"```\n{text.strip()}\n```"
+
+    preamble = lines[:net_idx]
+    balance_rows = _extract_balances_rows(lines, net_idx + 1, trans_idx)
+
+    trans_stop = _section_end(lines, trans_idx + 1)
+    trans_rows = _extract_table_rows(lines, trans_idx + 1, trans_stop)
+
+    trans_headers = ["From", "To", "EUR", "USD", "GBP"]
+    for raw in lines[trans_idx + 1 : trans_stop]:
+        line = raw.strip()
+        if re.match(r"^\s*From\s+To(\s+\w+){1,}\s*$", line):
+            parts = [part for part in re.split(r"\s{2,}", line) if part]
+            if len(parts) >= 2:
+                trans_headers = parts[:2] + parts[2:]
+            break
+
+    if not trans_rows and any("Everyone is already settled." in line for line in lines):
+        trans_rows = [["Everyone is already settled."]]
+
+    if not balance_rows and any("Error:" in line for line in lines):
+        return text
+
+    output_lines = [line for line in preamble if line.strip()]
+    output_lines.append("```")
+    output_lines.append("Net balances")
+    if balance_rows:
+        output_lines.append(_markdown_table(["Name", "Balance"], balance_rows))
+    else:
+        output_lines.append("No balances available.")
+
+    output_lines.append("")
+    output_lines.append("Transactions to settle")
+    if trans_rows:
+        if len(trans_rows[0]) > len(trans_headers):
+            trans_headers.extend([""] * (len(trans_rows[0]) - len(trans_headers)))
+        elif len(trans_rows[0]) < len(trans_headers):
+            trans_headers = trans_headers[: len(trans_rows[0])]
+        output_lines.append(_markdown_table(trans_headers, trans_rows))
+    else:
+        output_lines.append("No settlements required.")
+
+    # Keep the branding line with the final output line.
+    promo_line = next(
+        (
+            line
+            for line in reversed(lines)
+            if line.startswith("Settle it easily with Splitwise Settle:")
+        ),
+        "",
+    )
+    if promo_line:
+        output_lines.append("")
+        output_lines.append(promo_line)
+
+    output_lines.append("```")
+
+    return "\n".join(output_lines)
 
 
 def parse_csv(filepath):
@@ -248,31 +403,170 @@ def process_file(filepath, display_currencies=None):
     balances = compute_balances(converted, people)
     simplified = minimize_transactions(balances)
 
+    if tabulate is None:
+        return _format_output_plain_fallback(
+            basename,
+            base_currency,
+            balances,
+            simplified,
+            exchange_rates,
+            display_currencies,
+        )
+
+    return _format_output_tabulate(
+        basename,
+        base_currency,
+        balances,
+        simplified,
+        exchange_rates,
+        display_currencies,
+    )
+
+
+def _format_output_tabulate(
+    basename, base_currency, balances, simplified, exchange_rates, display_currencies
+):
+    sorted_balances = sorted(
+        balances.items(),
+        key=lambda item: Decimal(str(item[1])),
+        reverse=True,
+    )
+    selected_currencies = [base_currency] + [
+        currency for currency in display_currencies if currency != base_currency
+    ]
+
+    balance_rows = []
+    for person, bal in sorted_balances:
+        balance_rows.append([person, f"{money(bal):+.2f} {base_currency}"])
+
+    balances_table = tabulate(
+        balance_rows,
+        headers=["Name", "Balance"],
+        tablefmt="plain",
+        colalign=("left", "right"),
+        disable_numparse=True,
+    )
+
+    settlement_rows = []
+    for debtor, creditor, amt in simplified:
+        row = [debtor, creditor]
+        for currency in selected_currencies:
+            row.append(f"{convert_from_base(amt, currency, exchange_rates):.2f}")
+        settlement_rows.append(row)
+
+    if simplified:
+        settlements_table = tabulate(
+            settlement_rows,
+            headers=["From", "To"] + selected_currencies,
+            tablefmt="plain",
+            colalign=("left", "left") + ("right",) * len(selected_currencies),
+            disable_numparse=True,
+        )
+        settlement_divider = "-" * max(1, max(len(line) for line in settlements_table.splitlines()))
+    else:
+        settlements_table = "Everyone is already settled."
+        settlement_divider = None
+
     lines = [
         f"File: {basename}",
         f"Converting everything to: {base_currency}",
         "",
-        "Net balances:",
+        "Net balances",
+        balances_table,
+        "",
+        "Transactions to settle",
+    ]
+    if not simplified:
+        lines.append(settlements_table)
+        lines.append("")
+        lines.append(f"Settle it easily with Splitwise Settle: {REPOSITORY_URL}")
+        return "\n".join(lines)
+
+    lines.extend(["", settlement_divider, settlements_table, "", f"Settle it easily with Splitwise Settle: {REPOSITORY_URL}"])
+    return "\n".join(lines)
+
+
+def _format_output_plain_fallback(
+    basename, base_currency, balances, simplified, exchange_rates, display_currencies
+):
+    sorted_balances = sorted(
+        balances.items(),
+        key=lambda item: Decimal(str(item[1])),
+        reverse=True,
+    )
+    name_width = max(len("Name"), max((len(person) for person, _ in sorted_balances), default=0)
+    )
+    balance_value_width = max(
+        max((len(f"{money(bal):+.2f}") for _, bal in sorted_balances), default=0),
+        len("Balance"),
+    )
+    balance_col_width = balance_value_width + 1 + len(base_currency)
+
+    lines = [
+        f"File: {basename}",
+        f"Converting everything to: {base_currency}",
+        "",
+        "Net balances",
+        "",
+        f"{'Name'.ljust(name_width)}  {'Balance'.rjust(balance_col_width)}",
+        "-" * (name_width + 2 + balance_col_width),
     ]
 
-    for person, bal in balances.items():
-        lines.append(f"  {person}: {money(bal)} {base_currency}")
+    for person, bal in sorted_balances:
+        lines.append(
+            f"{person.ljust(name_width)}  "
+            f"{f'{money(bal):+.2f} {base_currency}'.rjust(balance_col_width)}"
+        )
 
-    lines.extend(["", "Transactions to settle:"])
-    if simplified:
-        for debtor, creditor, amt in simplified:
-            converted_amounts = []
-            for currency in display_currencies:
-                converted = convert_from_base(amt, currency, exchange_rates)
-                converted_amounts.append(f"{converted} {currency}")
-            conversion_note = ", ".join(converted_amounts)
-            lines.append(
-                f"  {debtor} pays {creditor}: {money(amt)} {base_currency} "
-                f"(about {conversion_note})"
-            )
-    else:
-        lines.append("  Everyone is already settled.")
+    lines.extend(["", "Transactions to settle", ""])
 
+    if not simplified:
+        lines.append("Everyone is already settled.")
+        lines.append("")
+        lines.append(f"Settle it easily with Splitwise Settle: {REPOSITORY_URL}")
+        return "\n".join(lines)
+
+    selected_currencies = [base_currency] + [
+        currency for currency in display_currencies if currency != base_currency
+    ]
+    from_width = max(len("From"), max((len(debtor) for debtor, _, _ in simplified), default=0))
+    to_width = max(len("To"), max((len(creditor) for _, creditor, _ in simplified), default=0))
+    value_width = max(
+        max((len(curr) for curr in selected_currencies), default=0),
+        max(
+            (
+                len(f"{convert_from_base(amt, curr, exchange_rates):.2f}")
+                for _, _, amt in simplified
+                for curr in selected_currencies
+            ),
+            default=0,
+        ),
+    )
+
+    header = (
+        f"{'From'.ljust(from_width)}  "
+        f"{'To'.ljust(to_width)}  "
+        + "  ".join(f"{curr.rjust(value_width)}" for curr in selected_currencies)
+    )
+    settlement_divider = (
+        "-" * from_width
+        + "  "
+        + "-" * to_width
+        + "  "
+        + "  ".join("-" * value_width for _ in selected_currencies)
+    )
+    lines.append(header)
+    lines.append(settlement_divider)
+
+    for debtor, creditor, amt in simplified:
+        amounts = "  ".join(
+            f"{convert_from_base(amt, currency, exchange_rates):.2f}".rjust(value_width)
+            for currency in selected_currencies
+        )
+        lines.append(f"{debtor.ljust(from_width)}  {creditor.ljust(to_width)}  {amounts}")
+
+    lines.append("")
+    lines.append(f"Settle it easily with Splitwise Settle: {REPOSITORY_URL}")
     return "\n".join(lines)
 
 
@@ -373,9 +667,15 @@ class SplitwiseSettleWindow(QMainWindow):
             "Splitwise export into this window or choose it with Browse. Results "
             "appear below; the app no longer writes an output file. The app settles "
             "in the most common currency in the file to reduce conversion noise, "
-            "then shows converted equivalents at the end of each settlement line."
+            "then shows converted equivalents at the end of each settlement line. "
+            f'Public repository: <a href="{REPOSITORY_URL}">{REPOSITORY_URL}</a>'
         )
         self.guidelines.setObjectName("guidelines")
+        self.guidelines.setTextFormat(Qt.TextFormat.RichText)
+        self.guidelines.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.guidelines.setOpenExternalLinks(True)
         self.guidelines.setWordWrap(True)
         main_layout.addWidget(self.guidelines)
 
@@ -418,7 +718,9 @@ class SplitwiseSettleWindow(QMainWindow):
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setPlaceholderText("Settlement results will appear here.")
+        self.output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.output.setFont(QFont("Consolas", 10))
+        self.output.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         main_layout.addWidget(self.output, stretch=1)
 
         footer = QHBoxLayout()
@@ -432,6 +734,24 @@ class SplitwiseSettleWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setFixedWidth(180)
         footer.addWidget(self.progress, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.copy_button = QPushButton("Copy")
+        self.copy_button.setEnabled(False)
+        self.copy_button.clicked.connect(self.copy_output)
+        footer.addWidget(self.copy_button)
+
+        self.whatsapp_copy_button = QPushButton("Copy for WhatsApp")
+        self.whatsapp_copy_button.setEnabled(False)
+        self.whatsapp_copy_button.clicked.connect(self.copy_whatsapp_output)
+        footer.addWidget(self.whatsapp_copy_button)
+
+        self.save_button = QPushButton("Save output...")
+        self.save_button.clicked.connect(self.save_output_snapshot)
+        footer.addWidget(self.save_button)
+
+        self.open_snapshot_button = QPushButton("Open output file")
+        self.open_snapshot_button.clicked.connect(self.open_output_snapshot_file)
+        footer.addWidget(self.open_snapshot_button)
 
         self.clear_button = QPushButton("Clear")
         self.clear_button.clicked.connect(self.clear_output)
@@ -470,6 +790,8 @@ class SplitwiseSettleWindow(QMainWindow):
                 border-radius: 6px;
                 padding: 8px;
                 selection-background-color: #b8cdf7;
+                font-family: "Consolas", "Courier New", monospace;
+                font-size: 10pt;
             }
             QPushButton {
                 background: #ffffff;
@@ -540,9 +862,12 @@ class SplitwiseSettleWindow(QMainWindow):
     def handle_result(self, index, _total, result):
         self.append_output(result + "\n\n")
         self.progress.setValue(index)
+        self._update_copy_state()
 
     def handle_done(self, total):
         self.status_label.setText(f"Done - processed {total} file(s)")
+        self._dump_output_text_for_debug()
+        self._update_copy_state()
         self._set_busy(False)
         self.worker = None
 
@@ -557,6 +882,75 @@ class SplitwiseSettleWindow(QMainWindow):
         self.output.clear()
         self.progress.setValue(0)
         self.status_label.setText("Ready")
+        self._update_copy_state()
+
+    def copy_output(self):
+        text = self.output.toPlainText()
+        if not text.strip():
+            self.status_label.setText("Nothing to copy.")
+            return
+        QApplication.clipboard().setText(text)
+        self.status_label.setText("Results copied to clipboard.")
+
+    def save_output_snapshot(self):
+        text = self.output.toPlainText()
+        if not text.strip():
+            self.status_label.setText("Nothing to save.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save output snapshot",
+            "splitwise_settle_output.txt",
+            "Text files (*.txt);;All files (*.*)",
+        )
+        if not path:
+            return
+
+        Path(path).write_text(text, encoding="utf-8")
+        self.status_label.setText(f"Saved output to: {path}")
+
+    def open_output_snapshot_file(self):
+        text = self.output.toPlainText()
+        if not text.strip():
+            self.status_label.setText("Nothing to save.")
+            return
+
+        snapshot_path = Path(
+            tempfile.gettempdir()
+        ) / "splitwise_settle_output_snapshot.txt"
+        snapshot_path.write_text(text, encoding="utf-8")
+
+        if sys.platform == "win32":
+            os.startfile(str(snapshot_path))
+        else:
+            subprocess.call(["xdg-open", str(snapshot_path)])
+
+        self.status_label.setText(f"Opened snapshot: {snapshot_path}")
+
+    def _dump_output_text_for_debug(self):
+        dump_path = os.getenv(DEBUG_DUMP_ENV)
+        if not dump_path:
+            return
+        path = Path(dump_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = self.output.toPlainText()
+        path.write_text(text, encoding="utf-8")
+        self.status_label.setText(f"Output snapshot saved: {path}")
+
+    def _update_copy_state(self):
+        self.copy_button.setEnabled(bool(self.output.toPlainText().strip()))
+        self.whatsapp_copy_button.setEnabled(bool(self.output.toPlainText().strip()))
+
+    def copy_whatsapp_output(self):
+        text = self.output.toPlainText()
+        if not text.strip():
+            self.status_label.setText("Nothing to copy.")
+            return
+
+        whatsapp_text = format_output_for_whatsapp(text)
+        QApplication.clipboard().setText(whatsapp_text)
+        self.status_label.setText("WhatsApp-formatted output copied.")
 
     def selected_display_currencies(self):
         return [checkbox.text() for checkbox in self.currency_checks if checkbox.isChecked()]

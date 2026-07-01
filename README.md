@@ -2,6 +2,14 @@
 
 # Splitwise Settle
 
+## TL;DR
+
+1. Export your group expenses from Splitwise as a CSV.
+2. Open the app and drop the CSV (or choose it via **Browse**).
+3. Pick the currencies you want to display (defaults: EUR, USD, GBP).
+4. Run settlement and copy/share the result from the output panel (including WhatsApp-friendly formatting).
+5. Share the results with your group; no Splitwise Pro account is required.
+
 Splitwise Settle is a small desktop app for turning a Splitwise group CSV export into a compact settlement plan.
 
 It is useful when your group used multiple currencies and you do not have Splitwise Pro currency conversion available. The app reads the exported expenses, converts every split through the European Central Bank daily euro foreign exchange reference rates, minimizes who needs to pay whom, and shows the settlement amounts in the app.
