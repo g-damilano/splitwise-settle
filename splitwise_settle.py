@@ -8,7 +8,6 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-import tempfile
 import re
 
 
@@ -749,10 +748,6 @@ class SplitwiseSettleWindow(QMainWindow):
         self.save_button.clicked.connect(self.save_output_snapshot)
         footer.addWidget(self.save_button)
 
-        self.open_snapshot_button = QPushButton("Open output file")
-        self.open_snapshot_button.clicked.connect(self.open_output_snapshot_file)
-        footer.addWidget(self.open_snapshot_button)
-
         self.clear_button = QPushButton("Clear")
         self.clear_button.clicked.connect(self.clear_output)
         footer.addWidget(self.clear_button)
@@ -909,24 +904,6 @@ class SplitwiseSettleWindow(QMainWindow):
 
         Path(path).write_text(text, encoding="utf-8")
         self.status_label.setText(f"Saved output to: {path}")
-
-    def open_output_snapshot_file(self):
-        text = self.output.toPlainText()
-        if not text.strip():
-            self.status_label.setText("Nothing to save.")
-            return
-
-        snapshot_path = Path(
-            tempfile.gettempdir()
-        ) / "splitwise_settle_output_snapshot.txt"
-        snapshot_path.write_text(text, encoding="utf-8")
-
-        if sys.platform == "win32":
-            os.startfile(str(snapshot_path))
-        else:
-            subprocess.call(["xdg-open", str(snapshot_path)])
-
-        self.status_label.setText(f"Opened snapshot: {snapshot_path}")
 
     def _dump_output_text_for_debug(self):
         dump_path = os.getenv(DEBUG_DUMP_ENV)
