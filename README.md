@@ -1,3 +1,5 @@
+![Splitwise Settle banner](banner.png)
+
 # Splitwise Settle
 
 Splitwise Settle is a small desktop app for turning a Splitwise group CSV export into a compact settlement plan.

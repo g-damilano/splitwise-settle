@@ -7,6 +7,7 @@ import sys
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 
 
 def ensure_package(pkg_name, import_name=None):
@@ -21,7 +22,7 @@ def ensure_package(pkg_name, import_name=None):
 
 try:
     from PyQt6.QtCore import QThread, Qt, pyqtSignal
-    from PyQt6.QtGui import QFont, QTextCursor
+    from PyQt6.QtGui import QFont, QIcon, QTextCursor
     from PyQt6.QtWidgets import (
         QApplication,
         QFileDialog,
@@ -41,7 +42,7 @@ try:
 except ImportError:
     ensure_package("PyQt6")
     from PyQt6.QtCore import QThread, Qt, pyqtSignal
-    from PyQt6.QtGui import QFont, QTextCursor
+    from PyQt6.QtGui import QFont, QIcon, QTextCursor
     from PyQt6.QtWidgets import (
         QApplication,
         QFileDialog,
@@ -68,6 +69,12 @@ except ImportError:
 APP_TITLE = "Splitwise Settlement"
 ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 MONEY = Decimal("0.01")
+
+
+def resource_path(filename):
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, filename)
+    return str(Path(__file__).with_name(filename))
 
 
 def money(value):
@@ -543,7 +550,10 @@ class SplitwiseSettleWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app_icon = QIcon(resource_path("icon.png"))
+    app.setWindowIcon(app_icon)
     window = SplitwiseSettleWindow()
+    window.setWindowIcon(app_icon)
     window.show()
     sys.exit(app.exec())
 
