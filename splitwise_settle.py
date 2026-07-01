@@ -25,11 +25,12 @@ try:
     from PyQt6.QtGui import QFont, QIcon, QTextCursor
     from PyQt6.QtWidgets import (
         QApplication,
+        QCheckBox,
         QFileDialog,
         QFrame,
+        QGridLayout,
         QHBoxLayout,
         QLabel,
-        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPlainTextEdit,
@@ -45,11 +46,12 @@ except ImportError:
     from PyQt6.QtGui import QFont, QIcon, QTextCursor
     from PyQt6.QtWidgets import (
         QApplication,
+        QCheckBox,
         QFileDialog,
         QFrame,
+        QGridLayout,
         QHBoxLayout,
         QLabel,
-        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPlainTextEdit,
@@ -69,12 +71,26 @@ except ImportError:
 APP_TITLE = "Splitwise Settlement"
 ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 MONEY = Decimal("0.01")
+DEFAULT_DISPLAY_CURRENCIES = ["EUR", "USD", "GBP"]
+AVAILABLE_DISPLAY_CURRENCIES = [
+    "EUR",
+    "USD",
+    "GBP",
+    "CHF",
+    "JPY",
+    "CAD",
+    "AUD",
+    "NZD",
+    "SEK",
+    "NOK",
+    "DKK",
+]
 
 
-def resource_path(filename):
+def resource_path(relative_path):
     if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, filename)
-    return str(Path(__file__).with_name(filename))
+        return os.path.join(sys._MEIPASS, relative_path)
+    return str(Path(__file__).resolve().parent / relative_path)
 
 
 def money(value):
@@ -217,21 +233,12 @@ def minimize_transactions(balances):
     return transactions
 
 
-def parse_display_currencies(text):
-    currencies = []
-    for item in text.replace(";", ",").split(","):
-        currency = item.strip().upper()
-        if currency and currency not in currencies:
-            currencies.append(currency)
-    return currencies or ["EUR", "USD", "GBP"]
-
-
 def process_file(filepath, display_currencies=None):
     basename = os.path.basename(filepath)
     transactions, people = parse_csv(filepath)
     currencies_used = [tx["currency"] for tx in transactions if tx["currency"]]
     base_currency = Counter(currencies_used).most_common(1)[0][0]
-    display_currencies = display_currencies or ["EUR", "USD", "GBP"]
+    display_currencies = display_currencies or DEFAULT_DISPLAY_CURRENCIES
 
     unique_currencies = set(currencies_used)
     all_needed = unique_currencies.union({base_currency, *display_currencies})
@@ -392,10 +399,18 @@ class SplitwiseSettleWindow(QMainWindow):
         currency_label = QLabel("Display currencies")
         currency_layout.addWidget(currency_label)
 
-        self.currency_input = QLineEdit("EUR, USD, GBP")
-        self.currency_input.setPlaceholderText("EUR, USD, GBP")
-        self.currency_input.setFixedWidth(180)
-        currency_layout.addWidget(self.currency_input)
+        self.currency_checks = []
+        currency_grid = QGridLayout()
+        currency_grid.setHorizontalSpacing(12)
+        currency_grid.setVerticalSpacing(4)
+
+        for index, currency in enumerate(AVAILABLE_DISPLAY_CURRENCIES):
+            checkbox = QCheckBox(currency)
+            checkbox.setChecked(currency in DEFAULT_DISPLAY_CURRENCIES)
+            self.currency_checks.append(checkbox)
+            currency_grid.addWidget(checkbox, index // 6, index % 6)
+
+        currency_layout.addLayout(currency_grid)
         currency_layout.addStretch(1)
 
         main_layout.addLayout(currency_layout)
@@ -462,14 +477,12 @@ class SplitwiseSettleWindow(QMainWindow):
                 border-radius: 6px;
                 padding: 8px 12px;
             }
-            QLineEdit {
-                background: #ffffff;
-                border: 1px solid #b8c1d1;
-                border-radius: 6px;
-                padding: 6px 8px;
-            }
             QPushButton:hover {
                 background: #eef3ff;
+            }
+            QCheckBox {
+                spacing: 5px;
+                background: transparent;
             }
             QPushButton:disabled {
                 color: #8a92a3;
@@ -507,7 +520,10 @@ class SplitwiseSettleWindow(QMainWindow):
             QMessageBox.information(self, APP_TITLE, "A batch is already running.")
             return
 
-        display_currencies = parse_display_currencies(self.currency_input.text())
+        display_currencies = self.selected_display_currencies()
+        if not display_currencies:
+            QMessageBox.warning(self, APP_TITLE, "Choose at least one display currency.")
+            return
 
         self.progress.setRange(0, len(csv_paths))
         self.progress.setValue(0)
@@ -542,15 +558,19 @@ class SplitwiseSettleWindow(QMainWindow):
         self.progress.setValue(0)
         self.status_label.setText("Ready")
 
+    def selected_display_currencies(self):
+        return [checkbox.text() for checkbox in self.currency_checks if checkbox.isChecked()]
+
     def _set_busy(self, busy):
         self.browse_button.setDisabled(busy)
         self.clear_button.setDisabled(busy)
-        self.currency_input.setDisabled(busy)
+        for checkbox in self.currency_checks:
+            checkbox.setDisabled(busy)
 
 
 def main():
     app = QApplication(sys.argv)
-    app_icon = QIcon(resource_path("icon.png"))
+    app_icon = QIcon(resource_path("assets/icon.png"))
     app.setWindowIcon(app_icon)
     window = SplitwiseSettleWindow()
     window.setWindowIcon(app_icon)

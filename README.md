@@ -1,4 +1,4 @@
-![Splitwise Settle banner](banner.png)
+![Splitwise Settle banner](assets/banner.png)
 
 # Splitwise Settle
 
@@ -13,7 +13,7 @@ It is useful when your group used multiple currencies and you do not have Splitw
 - Uses the ECB daily exchange-rate feed for currency conversion.
 - Minimizes the final payments needed to settle the group.
 - Shows the result in EUR, USD, and GBP by default.
-- Lets you add more display currencies, for example `CHF, JPY, CAD`.
+- Lets you select extra display currencies such as CHF, JPY, and CAD.
 - Does not upload your Splitwise export anywhere. The CSV is processed locally; only the ECB exchange-rate XML is downloaded.
 
 ## Getting the CSV out of Splitwise
@@ -66,7 +66,7 @@ Or install the dependencies, then run PyInstaller manually:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m PyInstaller --noconfirm --clean splitwise_settle.spec
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name splitwise_settle --icon assets\icon.ico --add-data "assets\icon.png;assets" splitwise_settle.py
 ```
 
 The executable will be created at:
