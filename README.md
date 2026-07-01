@@ -56,11 +56,17 @@ Download or run that file if you do not want to install Python locally.
 
 ## Build a Windows executable
 
-Install the dependencies, then run PyInstaller:
+On Windows, run:
+
+```powershell
+.\rebuild_exe.bat
+```
+
+Or install the dependencies, then run PyInstaller manually:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m PyInstaller --noconfirm --onefile --windowed --name splitwise_settle splitwise_settle.py
+python -m PyInstaller --noconfirm --clean splitwise_settle.spec
 ```
 
 The executable will be created at:
