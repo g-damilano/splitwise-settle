@@ -5,7 +5,7 @@
 ## TL;DR
 
 1. Export your group expenses from Splitwise as a CSV.
-2. Open the app and drop the CSV (or choose it via **Browse**).
+2. Run the app (`dist\splitwise_settle.exe`) and drop the CSV (or choose it via **Browse**).
 3. Pick the currencies you want to display (defaults: EUR, USD, GBP).
 4. Run settlement and copy/share the result from the output panel (including WhatsApp-friendly formatting).
 5. Share the results with your group; no Splitwise Pro account is required.
